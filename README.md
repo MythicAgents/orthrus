@@ -21,9 +21,9 @@ From the Mythic install root, run the command:
 
 Once installed, restart Mythic.
 
-Orthrus uses Apple's Push Notification Service to send messages to the target device. For this reason, we need to configure APN push certificates. Some of the options for this can be found at (Understanding MDM Certificates)[https://micromdm.io/blog/certificates/]. 
+Orthrus uses Apple's Push Notification Service to send messages to the target device. For this reason, we need to configure APN push certificates. Some of the options for this can be found at [Understanding MDM Certificates](https://micromdm.io/blog/certificates/). 
 
-In my opinion, (mdmcert.download)[https://mdmcert.download/] is the easiest way to do this, as long as you're able to adhere to their ToS. Full instructions for getting the APN certs this way can be found (here)[https://github.com/micromdm/micromdm/wiki/mdmcert.download].
+In my opinion, [mdmcert.download](https://mdmcert.download/) is the easiest way to do this, as long as you're able to adhere to their ToS. Full instructions for getting the APN certs this way can be found [here](https://github.com/micromdm/micromdm/wiki/mdmcert.download).
 
 Instead of running the `mdmctl mdmcert upload` command manually, put the certificates in the `C2_Profiles/mdm/certs/` folder, as `apn.pem` and `apn.key`. 
 
@@ -71,7 +71,7 @@ The certificate can now be used as a signing identity.
 
 ## Commands Manual Quick Reference
 
-The commands available to us are dependent on the Apple MDM protocol, a full list of commands can be found on Apple's developer docs (here)[https://developer.apple.com/documentation/devicemanagement/commands_and_queries].
+The commands available to us are dependent on the Apple MDM protocol, a full list of commands can be found on Apple's developer docs [here](https://developer.apple.com/documentation/devicemanagement/commands_and_queries).
 
 ### General Commands
 
