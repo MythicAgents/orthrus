@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Medusa Logo" src="agent_icons/orthrus.svg" height="30%" width="30%">
+  <img alt="Orthrus Logo" src="agent_icons/orthrus.svg" height="30%" width="30%">
 </p>
 
 # Orthrus
