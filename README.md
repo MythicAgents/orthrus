@@ -68,6 +68,29 @@ The certificate can now be used as a signing identity.
 
 ### pkg-cmd-helper
 
+To automate the process of creating a signed package. I've put together a rough bash script to build packages that execute bash command, and subsequently sign them with an identity - [pkg-cmd-helper.sh](https://gist.github.com/rookuu/49ea14a50854542ca7f5cde70962e502).
+
+```
+➜  ./pkg-cmd-helper.sh -h
+Command line helper to generate pkg files that execute commands.
+Author: @rookuu
+
+Syntax: gen.sh -i com.malicious.pkg -o installme.pkg [-s 'My Signing Identity'] command
+options:
+-h     Print this Help.
+-i     Identifier for the package.
+-o     File name for the output package.
+-s     (optional) Identity to use when signing the package.
+
+➜  ./pkg-cmd-helper.sh -i com.rookuu.pkg -o example.pkg -s 192.168.0.5 mkdir /tmp/hacked
+Building in /var/folders/fc/lc78954d3mnfvn4wbz8_20nc0000gn/T/tmp.mmsY0R6i
+pkgbuild: Adding top-level preinstall script
+pkgbuild: Wrote package to /var/folders/fc/lc78954d3mnfvn4wbz8_20nc0000gn/T/tmp.mmsY0R6i/temp.pkg
+productbuild: Wrote product to /var/folders/fc/lc78954d3mnfvn4wbz8_20nc0000gn/T/tmp.mmsY0R6i/temp_dist.pkg
+productsign: signing product with identity "192.168.0.5" from keychain /Library/Keychains/System.keychain
+productsign: Wrote signed product archive to /var/folders/fc/lc78954d3mnfvn4wbz8_20nc0000gn/T/tmp.mmsY0R6i/temp_dist_signed.pkg
+Done, see: example.pkg
+```
 
 ## Commands Manual Quick Reference
 
