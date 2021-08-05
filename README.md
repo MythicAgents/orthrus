@@ -17,7 +17,7 @@ To install Orthrus, you'll need Mythic installed on a remote computer. You can f
 
 From the Mythic install root, run the command:
 
-`./mythic-cli payload install github https://github.com/MythicAgents/orthrus.git`
+`./mythic-cli install github https://github.com/MythicAgents/orthrus.git`
 
 Once installed, restart Mythic.
 
