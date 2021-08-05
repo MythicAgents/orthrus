@@ -1,0 +1,7 @@
+{
+  "webhook_port": 8035,
+  "mdm_host": "172.17.2.81",
+  "tls_cert": "TLS CERT GOES HERE",
+  "tls_key": "TLS KEY GOES HERE",
+  "debug": true
+}
