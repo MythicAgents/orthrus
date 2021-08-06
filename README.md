@@ -23,7 +23,7 @@ Once installed, restart Mythic.
 
 Orthrus uses Apple's Push Notification Service to send messages to the target device. For this reason, we need to configure APN push certificates. Some of the options for this can be found at [Understanding MDM Certificates](https://micromdm.io/blog/certificates/). 
 
-In my opinion, [mdmcert.download](https://mdmcert.download/) is the easiest way to do this, as long as you're able to adhere to their ToS. Full instructions for getting the APN certs this way can be found [here](https://github.com/micromdm/micromdm/wiki/mdmcert.download).
+In my opinion, installing Server.app, setting up Profile Manager and then exporting the push cert from the keychain is the easiest way to do this. Full instructions for getting the APN certs in a more permanent way can be found [here](https://github.com/micromdm/micromdm/blob/master/docs/user-guide/quickstart.md#configure-an-apns-certificate).
 
 Instead of running the `mdmctl mdmcert upload` command manually, put the certificates in the `C2_Profiles/mdm/certs/` folder, as `apn.pem` and `apn.key`. 
 
