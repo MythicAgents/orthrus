@@ -114,3 +114,4 @@ install\_pkg | `install_pkg` | Installs a PKG installer file (upload using UI). 
 ## Thanks
 
 - [@its_a_feature_](https://twitter.com/its_a_feature_) for helping to troubleshoot all of the bugs in my code. :)
+- [@1njection](https://twitter.com/1njection) for prior art on the topic, checkout the blog here (lots of other cool stuff here too) http://lockboxx.blogspot.com/2019/04/macos-red-teaming-203-mdm-mobile-device.html. 
